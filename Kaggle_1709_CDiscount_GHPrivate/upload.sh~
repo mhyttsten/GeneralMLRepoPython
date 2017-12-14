@@ -1,0 +1,4 @@
+#!/bin/bash
+
+tar cvf tmp.tar *
+scp tmp.tar magnus_hyttsten@35.199.178.142:/tmp2/cdiscount/code

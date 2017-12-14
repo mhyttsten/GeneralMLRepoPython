@@ -1,0 +1,371 @@
+# Tensors:      https://www.tensorflow.org/resources/dims_types
+# Variables:    https://www.tensorflow.org/how_tos/variables/
+# CPUs/GPUs:    https://www.tensorflow.org/how_tos/using_gpu/
+# Distribution: https://www.tensorflow.org/how_tos/distributed/
+# Cross-entropy loss: http://colah.github.io/posts/2015-09-Visual-Information/
+# MNIST visualization: http://colah.github.io/posts/2014-10-Visualizing-MNIST/
+# Michael Nielsens book: http://neuralnetworksanddeeplearning.com/chap3.html#softmax
+# Classification dataset results: http://rodrigob.github.io/are_we_there_yet/build/classification_datasets_results.html
+
+
+# --- Questions / Notes
+- Somebody to explain to me how sess.run(gradientDescent, feed_dict={ ... }) does gradient updates
+  (how does it know what it updates (Variables?), how does it know how to do derivatives of ops tree)
+- Need a friendly discussion on tf.nn.conv2d
+- Bug: tf.nn.conv2d does not support tf.float64 (error in docs)
+- Blogposts: Describe tf.nn convolutions package
+- At runtime how do you know size of a [None, 784]) -> shape prints (?, 784)
+- CE loss only considers the loss related to the correct label, isn't that bad (SVM considers all)
+  (how is backprop happening when you have 10 output nodes, you've only seen graphs with 1)
+- TF03_2fully_connected_feed.do_eval
+
+# With Mark
+- Why is tensorflow.python.platform.gfile used in sample
+- Some samples use FLAGS, many not (what should it be?)
+- tf.contrib.learn.SKCompat is not documented (your CL)
+  Can't use it from my code, it is not documented, but warnings say that it should be used
+  Other docs e.g. DNNClassifier says nothing about this
+- tf.contrib.learn.datasets.base is not documented
+- Ridiculous amount of warnings in tf.contrib.learn
+- Bug lists we have (docs, samples, etc)
+- Access to prediction["classes"] gives: TypeError: 'generator' object has no attribute '__getitem__'
+- Change docs (but where, not GitHub proposal right?):  .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) -> Status {
+
+# Robert Nguyen
+- How do we do deep-copy: I only want to generate a random matrix once, but every time I refer to its
+  Tensor, it will re-generate
+- Isn't logits wrong to call as input to softmax_cross_entropy_with_logits. Logits are input to Sigmoid
+  (since they are the inverse), and Sigmoid has nothing to do with this
+- CE for classification never considers losses for the non-classes (0)
+- What does this do, is RunOptions tied to RunMetadata (which is used to get CPU/mem info in TB)?
+  ro = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+  rmd = tf.RunMetadata()
+  sum, ...= sess.run([..., options=ro, run_metadata=rmd
+- I cannot see any QueueRunners in graph through TB, are they hidden? (check
+  E.g: tf.train.string_input_producer needs to create a QueueRunner
+  tf.train.start_queue_runners(sess=sess, coord=coord)
+  mrry@ has a design doc on tf/design-reviews
+- tf.contrib.framework.get_or_create_global_step what's up with that?
+- I don't understand tf.train.ExponentialMovingAverage from cifar tutorial...
+- What is difference in shapes between
+  center_wd = tf.placeholder(tf.int32, shape=[BS])
+  target_wd = tf.placeholder(tf.int32, shape=[BS,1])
+- Global Step, Learning Rate, and opt.minimize vs messing with grads
+  (Tutorial | RNN)
+  1. What is this tf.contrib.legacy_seq2seq.sequence_loss_by_example
+    'legacy', is this package deprecated?
+  2. Minimizing loss
+    Q: tf.train depends on global_step but support function is in contrib: tf.contrib.framework.get_or_create_global_step()
+    a. What I commonly see
+      gs = tf.Variable(0, dtype=tf.int32, trainable=False)
+      opt = tf.train.GradientOptimizer(lr).minimize(loss, gs)
+    b. Tutorial | CNN
+      global_step = tf.contrib.framework.get_or_create_global_step()
+      lr = tf.train.exponential_decay(INITIAL_LEARNING_RATE,
+                                  global_step,
+                                  decay_steps,
+                                  LEARNING_RATE_DECAY_FACTOR,
+                                  staircase=True)
+      opt = tf.train.GradientDescentOptimizer(lr)
+      grads = opt.compute_gradients(loss)
+      apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
+    c. Tutorial | RNN (*** This has not been added to Quizlet "RNN Tutorial #....:" ***)
+      cost = tf.reduce_sum(loss) / batch_size
+      tvars = tf.trainable_variables()
+      grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars), config.max_grad_norm)
+      lr = tf.Variable(0.0, trainable=False)
+      optimizer = tf.train.GradientDescentOptimizer(lr)
+      train_op = optimizer.apply_gradients(
+        zip(grads, tvars),
+        global_step=tf.contrib.framework.get_or_create_global_step())
+      new_lr = tf.placeholder(tf.float32, shape=[])
+      lr_update = tf.assign(lr, new_lr)
+      Then regularly:
+        lr_decay = decay(0.5 ** max(i + 1 - max_epoch(4), 0.0)
+        m.assign_lr(session, config.learning_rate * lr_decay)
+        session.run(self._lr_update, feed_dict={new_lr: lr_value})
+
+
+# tf.contrib.learn
+- Notes, source directories:
+  tensorflow/contrib is full of stuff
+  tensorflow/contrib/learn only contains python
+  tensorflow/contrib/learn/python contains base learn packages
+- File: contrib/learn/python/learn/estimators/estimator.py (all high-level constructs in this estimators)
+  Functions:
+    infer_real_valued_columns_from_input_fn(input_fn): Creates temporary graph from which it builds FeatureColumns
+    infer_real_valued_columns_from_input(x): x = [examples, features]
+  Class: BaseEstimator(
+      sklearn.BaseEstimator, evaluable.Evaluable, trainable.Trainable)
+    Abstract class to train and evaluate TensorFlow models
+    Should not be subclassed (Estimator should be subclassed)
+    Concrete implementations of this class should override: _get_train/eval/predict_ops
+    Methods:
+      __init__
+      fit(x, y, input_fn, steps, batch_size, monitors, max_steps)
+         if x is not None: SKCompat(self).fit(x, y, batch_size, steps, max_steps, monitors)
+           So it automatically warps into SKCompat call if x is set
+           That means we should change samples to use input_fn
+         else:
+           _train_model(input_fn, ...)
+      evaluate
+         Same as fit, if x is not None then wrap in SKCompat
+         Otherwise call: _evaluate_model(input_fn, ...)
+      predict
+         Same as fit, if x is not None then wrap in SKCompat
+         Otherwise calls: _infer_model(input_fn, ...)
+      export: calls _export_estimator(
+      get_variables_value(name)
+      get_variables_names
+      _get_train_ops (abc.abstractproperty) - Overloaded in concrete impl
+      _get_predit_ops (abc.abstractproperty) - Overloaded in concrete impl
+      _get_eval_ops (throws NotImplementedError) - Overloaded in concrete impl
+  Class: Estimator(BaseEstimator)
+    Estimator class is the basic Tensorflow model trainer/evaluator,
+      e.g. class DNNClassifier(estimator.Estimator)
+    Methods implemented:
+      __init__
+      _call_model_fn
+      _get_train_ops
+      _get_eval_ops
+      _get_predict_ops
+      export_savedmodel: No idea how this relates to BaseEstimator.export
+  Class: SKCompat(sklearn.BaseEstimator):
+    Scikit learn wrapper for Tensorflow learn estimator
+    Methods:
+      Purpose in life is to convert x, y to input_fn and call estimator implementations
+      __init__(estimator): E.g a BaseEstimator
+      fit(x, y, ...): Calls estimator.fit with input_fn
+      score(x, y, ...): Calls estimator._evaluate_model with input_fn
+      predict(x): Calls estimator._infer_model with input_fn
+- File: contrib/learn/python/learn/trainable.py
+  Class: Trainable(object):
+    Subclasses are trainable, e.g 'Experiment'
+    Method:
+      fit(x, y, input_fn, steps, batch_size, monitors, max_steps)
+- File: contrib/learn/python/learn/trainable.py
+  Class: Evaluable(object):
+   Abstract methods: evaluate
+   Abstract property: model_dir
+
+
+
+- Experiment
+
+
+- DNNClassifier
+  fit (from Trainable)
+  evaluate (from Evaluable)
+
+
+# --- Outreach
+- Operaion.eval vs Session.run
+- TensorBoard - mini-series (6 episodes), why 'with tf.name_scope: '
+- Show me your model
+- TF execution model
+   Print a=tf.ones([1,2]) only prints type - values are printed in a sess
+   Variables, what they add to graph, execution to get initialized
+   Variable initialization order - checkpoints savings, ensambles
+- Model Theme Park (Model-Zoo)
+- Checkpointing
+- TensorFlow overview: contrib.learn, what is GA and not, GitHub, StackOverflow, ...
+- Debugging with TensorFlow
+- 'if', 'for' cannot be used in graph. tf.less instead of <. What's up with that?
+
+
+# --- Modules
+argparse # argparser.ArgumentParser)
+ospath   # os.path.join('/tmp/log', 'model.ckpt')
+sys
+time     # time.time()
+tf.      # lots of stuff
+tf.train # GradientDescentOptimizer
+tr.nn    # softmax_cross_entropy_with_logits
+tr.summary # progress tracking
+tf.gfile
+
+# --- Variables, constants, types, etc
+tf.zeros([rows, cols])
+c = tf.constant(v [,shape=])
+i1 = tf.placeholder(tf.float32) # Feeds
+   sess.run([ops], feed_dict={ i1:[7.] }
+i2 = tf.placeholder(tf.float32, [None, 784]) # An array of any x 784 float32s
+v = tf.Variable(tf.zeros([4,4])
+   [, name="counter"
+    , trainable=True|False]) # True - then added to GraphKeys.TRAINABLE_VARIABLES
+   v.initializer.run()
+init = tf.global_variables_initializer()
+   sess.run(init)
+
+
+# --- Type casting
++ tf.float32
++ tf.int32
++ float(arg)
++ tf.string_to_number(matrix, out_type=)
++ tf.cast(matrix, tf.int64)
++ tf.to_int64(tensor) # same as tf.cast(matrix, tf.int64)
++ tf.convert_to_tensor
+
+
+# --- Debugging
+tf.summary.scalar('loss', loss) # Outputs a Summary protocol buffer with a scalar (will also be series name in TB)
+summary = tf.summary.merge_all(key='summaries') # Merge all summaries collected in graph into key (def is GraphKeys.SUMMARIES)
+   # Returns None or scalar Tensor of type string
+swriter = tf.summary.FileWriter('/tmp/logdir', sess.graph)
+   swriter.add_summary(summary, global_step=None) # global_steps could e.g. every 100 batch trained
+   swriter.flush()
+
+
+# --- Basic math
+shape is a list of dimensions, e.g. [2,3]
+o = tf.matmul(a1, a2) # dot product
+o = tf.mul(a1, a2)    # scalar multiplication
+o = tf.add(a1, a2)
+o = tf.assign(lvalue, rvalue)
+tf.reduce_mean(...) # Calculate mean of entire matrix [or an axis]
+tf.reduce_sum(...)  # Sums elements of entire matrix [or an axis]
+tf.log(...)
+tf.argmax(y, 1)  # Returns index with highest value for axis=1
+tf.equal(m1, m2) # Returns boolean matrix, indicating where we have equality
+tf.cast(m, tf.float32) # Cast to new type, e.g if m is bool then its True elems with become 1.0
+tf.reshape(matrix, [d1, d2])
+tf.reduce_mean # take vector and get scalar
+tf.reduce_sum  # take vector and get sum
+
+tf.random_normal([dim1, dim2, ...], mean=, stddev=, ...)
+tf.random_truncated(...) # As random_normal but all values are within 2.0 standard deviations from mean
+math.sqrt(...) # need 'import math'
+
+
+# --- Transformations
+tf.pack(x [, axis=]) # Create Tensor from e.g. numpy array
+tf.reshape
+
+
+# --- tf File system
+tf.gfile.Exists(<dir>)
+tf.gfile.DeleteRecursively(<dir>)
+tf.gfile.MakeDirs(<dir)
+
+
+# --- Machine Learning
+tf.nn.in_topk(pred[batch,class], lables[batch], k)
+   pred[batch,class]: probability distribution for each class in each batch
+   labels[batch]: index of correct label in batch
+   k: 1 iff highest pred must match label, 2 if highest or 2nd highest must
+   Returns: binary vector with 1 if that batch was correct (according to k)
+tf.nn.softmax_cross_entropy_with_logits(labels=y_true, logits=y_predicted)
+tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits) # only one label may have value 1, all others 0
+tf.nn.relu(matrix)
+tf.nn.dropout(matrix, keep_prob)
+tf.train.GradientDescentOptimizer(learning_rate) # Has method .minimize(op)
+   global_step= # variable (non-trainable) incremented after variable update
+tf.nn.conv2d(input[batch, row, col, in_channle], filter[row, col, in_ch, out_ch],
+   stride=[1, hor, ver, 1], padding={"SAME", "VALID"}, data_format={"NHWC", "NCHW"}
+tf.nn.maxpool(input[as conv2d], ksize=[1, hor, ver, depth], stride/padding/data_format as conv2d)
+saver = tf.train.Saver() # Checkpointing (ops to save/restore variables to/from checkpoints)
+   # Checkpoints are binary files in a proprietary format
+   saver.save(sess, os.path.join('/tmp', 'model.ckpt'), global_step=)
+
+
+# --- Hardware / nodes
+Specifying hardware
+with tf.device("/gpu:0")
+with tf.Session("grpc:example.org:2222") - Master
+with tf.device("/job:ps/task:0") - Worker
+
+# ---
+You now have one more loss function: Huber loss
+- Lessens the effect for a few outlier
+- if diff(abs(y - f(x))) < delta:
+    return 1/2 * tf.square(y-f(x))
+  else:
+    return delta * tf.abs(y-f(x)) - 1/2 * tf.square(delta)
+
+
+# ---
+If statements cannot be used in TF graph, select must be used instead
+Also means, less etc must be used instaed of <
+Why can - and * be used?
+def huber_loss(labels, predictions, delta=1.0):
+  residual = tf.abs(labels - predictions)
+  condition = tf.less(residual, delta)
+  small_res = 0.5 * tf.square(residual)
+  large_res = delta * residual - 0.5 * tf.square(delta)
+  return tf.select(condition, small_res, large_res)
+
+
+# ---
+# Graphs
+If nothing is specified, then ops are automatically added to Graph.as_default()
+To explicity add to default graph:
+with Graph.as_default(): ...
+
+# --- Graphs vs Sessions
+Look at them as Programs (graphs) and Processes (Sessions)
+You can take same graph and independently execute them in different sessions
+
+# ---
+# Session
+# Alt #1
+s = tf.Session()
+s.run(op) or s.run([ops])
+s.close()
+
+# Alt 2
+# No need to close session explicitly
+with tf.Session() as sess:
+  with tf.device("/gpu:0"):
+     r = tf.matmul(c1, c2) # Specify ops directly
+     s.run(op1) alt s.run([ops])
+
+# Interactive sessions - e.g. iPython
+sess = tf.InteractiveSession()
+x = tf.Variable([1.0, 2.0])
+a = tf.constant([3.0, 3.0])
+x.initializer.run()
+sub = tf.sub(x, a)
+print(sub.eval())
+sess.close()
+
+# --- Reading MNIST
+from tensorflow.examples.tutorials.mnist import input_data
+mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
+mnist.train, .test, .validation
+mnist.train.labels, .images
+pixels, labels = mnist.train.next_batch(1000)
+
+******************************************************************************
+
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    '--learning_rate',
+    type=float,
+    default=0.01,
+    help='Initial learning rate.'
+)
+FLAGS, unparsed = parser.parse_known_args()
+
+Python:
+- operator // is floordiv
+- from tensorflow.contrib.learn.python.learn.estimators import estimator
+  means, import estimator.py from tensorflow/contrib/...
+  Then refer to things in this file though: estimator.Estimator
+
+SWIG:
+- Bridges C/C++ to Python and many other languages
+- Takes a "Interface file", e.g example.i:
+   %module example
+   %{
+      extern int fact(int n); /* let's say it's defined in example.c */
+   %}
+- Compile to Python
+   $ swig -python example.i # Creates example_wrap.c
+   $ gcc -c example.c example_wrap.c
+   $ ld -shared example.o example_wrap.o -o example.so
+- Now you can use in Python
+  import example
+  print example.fact(10)
+
