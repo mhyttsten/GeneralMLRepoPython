@@ -91,8 +91,8 @@ done_loss = -tf.log(done_loss)
 
 model_loss = tf.reduce_mean(observation_loss + done_loss + reward_loss)
 
-modelAdam = tf.train.AdamOptimizer(learning_rate=learning_rate)
-updateModel = modelAdam.minimize(model_loss)
+model_adam = tf.train.AdamOptimizer(learning_rate=learning_rate)
+update_model = model_adam.minimize(model_loss)
 
 
 '''
@@ -196,19 +196,31 @@ with tf.Session() as sess:
             hist_observation, hist_action, hist_reward, hist_done = [], [], [], []  # Reset array memory
 
             if trainTheModel == True:
-                actions = epa[:-1]
-                state_prevs1 = epo[:-1, :]
-                state_prevs = np.hstack([state_prevs1, actions])
+                actions = epa[:-1]          # All actions except the last
+                state_prevs1 = epo[:-1, :]  # All states except the last
+                # When observing state_prevs[index], we decided to take actions[index]
+                state_prevs = np.hstack([state_prevs1, actions])  # So shape [None, 5]
+                # When taking actions[index] from state_prevs[index]
+                #    1. We reached state_nexts[index]
                 state_nexts = epo[1:, :]
+                #    2. We collected rewards[index]
                 rewards = np.array(epr[1:, :])
+                #    3. And dones[index] became either 1 or 0
                 dones = np.array(epd[1:, :])
-                state_nextsAll = np.hstack([state_nexts, rewards, dones])
+                state_nexts_all = np.hstack([state_nexts, rewards, dones])
+                print("Shape of action: {}, state_prevs1: {}, state_prevs: {}".
+                      format(np.shape(actions), np.shape(state_prevs1), np.shape(state_prevs)))
+                print("    state_nexts: {}, rewards: {}, dones: {}".
+                      format(np.shape(state_nexts), np.shape(rewards), np.shape(dones)))
 
-                loss, pState, _ = sess.run([model_loss, predicted_state, updateModel],
-                                           feed_dict={previous_state: state_prevs,
-                                                      true_observation: state_nexts,
-                                                      true_done: dones,
-                                                      true_reward: rewards})
+                # Train our model simulator, given
+                #    - previous_states
+                #    - we use model to predict next states, rewards and dones
+                #    - Then update_model calculates and minimizes loss against true states, rewards, dones
+                _ = sess.run(update_model, feed_dict={previous_state: state_prevs,
+                                                     true_observation: state_nexts,
+                                                     true_done: dones,
+                                                     true_reward: rewards})
 
             if trainThePolicy == True:
                 discounted_epr = discount_rewards(epr).astype('float32')
