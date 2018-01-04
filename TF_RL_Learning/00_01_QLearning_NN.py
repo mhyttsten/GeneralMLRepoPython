@@ -20,18 +20,17 @@ env = gym.make('FrozenLake-v0')
 tf.reset_default_graph()
 
 # These lines establish the feed-forward part of the network used to choose actions
-inputs1 = tf.placeholder(shape=[1, 16], dtype=tf.float32)
+inputs = tf.placeholder(shape=[1, 16], dtype=tf.float32)
 W = tf.Variable(tf.random_uniform([16, 4], 0, 0.01))
-Qout = tf.matmul(inputs1, W)
+Qout = tf.matmul(inputs, W)
 predict = tf.argmax(Qout, 1)
 
 # Below we obtain the loss by taking the sum of squares difference between the target and prediction Q values.
 nextQ = tf.placeholder(shape=[1,4], dtype=tf.float32)
 loss = tf.reduce_sum(tf.square(nextQ - Qout))
-trainer = tf.train.GradientDescentOptimizer(learning_rate=0.1)
-updateModel = trainer.minimize(loss)
+train = tf.train.GradientDescentOptimizer(learning_rate=0.1).minimize(loss)
 
-init = tf.initialize_all_variables()
+init = tf.global_variables_initializer()
 
 # Set learning parameters
 y = .99
@@ -48,7 +47,6 @@ with tf.Session() as sess:
         # Reset environment and get first new observation
         s = env.reset()
         rAll = 0
-        d = False
         j = 0
 
         # Play 99 times
@@ -56,8 +54,7 @@ with tf.Session() as sess:
             j += 1
 
             # Choose an action by greedily (with e chance of random action) from the Q-network
-            a, allQ = sess.run([predict, Qout],
-                               feed_dict={inputs1: np.identity(16)[s:s+1]})
+            a, allQ = sess.run([predict, Qout], feed_dict={inputs: np.identity(16)[s:s+1]})
             if np.random.rand(1) < e:
                 a[0] = env.action_space.sample()
 
@@ -65,18 +62,14 @@ with tf.Session() as sess:
             s1, r, d ,_ = env.step(a[0])
 
             # Obtain the Q' values by feeding the new state through our network
-            Q1 = sess.run(Qout, feed_dict={inputs1:np.identity(16)[s1:s1+1]})
+            Q1 = sess.run(Qout, feed_dict={inputs:np.identity(16)[s1:s1+1]})
 
             # Obtain maxQ' and set our target value for chosen action.
             maxQ1 = np.max(Q1)
-            targetQ = allQ
-            targetQ[0, a[0]] = r + y * maxQ1
+            allQ[0, a[0]] = r + y * maxQ1
 
             # Train our network using target and predicted Q values
-            # _,W1 = sess.run([updateModel, W],
-            #                 feed_dict={ inputs1: np.identity(16)[s:s+1], nextQ: targetQ })
-            _ = sess.run(updateModel,
-                            feed_dict={ inputs1: np.identity(16)[s:s+1], nextQ: targetQ })
+            _ = sess.run(train, feed_dict={ inputs: np.identity(16)[s:s+1], nextQ: allQ })
 
             rAll += r
             s = s1
@@ -90,7 +83,7 @@ with tf.Session() as sess:
         rList.append(1)
         # rList.append(rAll)
 
-print "Percent of succesful episodes: " + str(sum(rList)/num_episodes) + "%"
+print("Percent of succesful episodes: {}".format(str(sum(rList)/num_episodes) + "%"))
 
 print(len(jList))
 print(len(rList))

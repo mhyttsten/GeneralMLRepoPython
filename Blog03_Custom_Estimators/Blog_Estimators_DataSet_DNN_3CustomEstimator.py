@@ -26,10 +26,12 @@ if sys.version_info < (3, 0, 0):
 else:
     from urllib.request import urlopen
 
+tf.logging.set_verbosity(tf.logging.INFO)
+
 # Check that we have correct TensorFlow version installed
 tf_version = tf.__version__
-print("TensorFlow version: {}".format(tf_version))
-assert "1.3" <= tf_version, "TensorFlow r1.3 or later is needed"
+tf.logging.info("TensorFlow version: {}".format(tf_version))
+assert "1.4" <= tf_version, "TensorFlow r1.4 or later is needed"
 
 # Windows users: You only need to change PATH, rest is platform independent
 PATH = "/tmp/tf_custom_estimators"
@@ -52,8 +54,6 @@ def downloadDataset(url, file):
 downloadDataset(URL_TRAIN, FILE_TRAIN)
 downloadDataset(URL_TEST, FILE_TEST)
 
-tf.logging.set_verbosity(tf.logging.INFO)
-
 # The CSV features in our training & test data
 feature_names = [
     'SepalLength',
@@ -63,8 +63,6 @@ feature_names = [
 
 # Create an input function reading a file using the Dataset API
 # Then provide the results to the Estimator API
-
-
 def my_input_fn(file_path, repeat_count=1, shuffle_count=1):
     def decode_csv(line):
         parsed_line = tf.decode_csv(line, [[0.], [0.], [0.], [0.], [0]])
@@ -74,9 +72,9 @@ def my_input_fn(file_path, repeat_count=1, shuffle_count=1):
         d = dict(zip(feature_names, features)), label
         return d
 
-    dataset = (tf.contrib.data.TextLineDataset(file_path)  # Read text file
+    dataset = (tf.data.TextLineDataset(file_path)  # Read text file
         .skip(1)  # Skip header row
-        .map(decode_csv, num_threads=4)  # Decode each line using decode_csv
+        .map(decode_csv, num_parallel_calls=4)  # Decode each line
         .cache() # Warning: Caches entire dataset, can cause out of memory
         .shuffle(shuffle_count)  # Randomize elems (1 == no operation)
         .repeat(repeat_count)    # Repeats dataset this # times
@@ -93,13 +91,11 @@ def my_model_fn(
     mode):    # And instance of tf.estimator.ModeKeys, see below
 
     if mode == tf.estimator.ModeKeys.PREDICT:
-        print("my_model_fn: PREDICT, %s"  % mode)
+        tf.logging.info("my_model_fn: PREDICT, {}".format(mode))
     elif mode == tf.estimator.ModeKeys.EVAL:
-        print("my_model_fn: EVAL, %s" % mode)
+        tf.logging.info("my_model_fn: EVAL, {}".format(mode))
     elif mode == tf.estimator.ModeKeys.TRAIN:
-        print("my_model_fn: TRAIN, %s" % mode)
-    else:
-        assert False
+        tf.logging.info("my_model_fn: TRAIN, {}".format(mode))
 
     # All our inputs are feature columns of type numeric_column
     feature_columns = [
@@ -116,15 +112,18 @@ def my_model_fn(
     # We implement it as a fully-connected layer (tf.layers.dense)
     # Has 10 neurons, and uses ReLU as the activation function
     # Takes input_layer as input
-    h1 = tf.layers.dense(input_layer, 10, activation=tf.nn.relu)
+    # h1 = tf.layers.dense(input_layer, 10, activation=tf.nn.relu)
+    h1 = tf.layers.Dense(10, activation=tf.nn.relu)(input_layer)
 
     # Definition of hidden layer: h2 (this is the logits layer)
     # Similar to h1, but takes h1 as input
-    h2 = tf.layers.dense(h1, 10, activation=tf.nn.relu)
+    # h2 = tf.layers.dense(h1, 10, activation=tf.nn.relu)
+    h2 = tf.layers.Dense(10, activation=tf.nn.relu)(h1)
 
     # Output 'logits' layer is three number = probability distribution
     # between Iris Sentosa, Versicolor, and Viginica
-    logits = tf.layers.dense(h2, 3)
+    # logits = tf.layers.dense(h2, 3)
+    logits = tf.layers.Dense(3, activation=tf.nn.relu)(h2)
 
     # class_ids will be the model prediction for the class (Iris flower type)
     # The output node with the highest value is our prediction
@@ -140,10 +139,7 @@ def my_model_fn(
     # To calculate the loss, we need to convert our labels
     # Our input labels have shape: [batch_size, 1]
     labels = tf.squeeze(labels, 1)          # Convert to shape [batch_size]
-    onehot_labels = tf.one_hot(labels, 3)   # Make one_hot: [batch_size, 3])
-    loss = tf.losses.softmax_cross_entropy( # Cross-entropy loss
-        onehot_labels=onehot_labels,
-        logits=logits)
+    loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
 
     # Calculate the accuracy between the true labels, and our predictions
     accuracy = tf.metrics.accuracy(labels, predictions['class_ids'])
@@ -156,8 +152,10 @@ def my_model_fn(
     if mode == tf.estimator.ModeKeys.EVAL:
         return tf.estimator.EstimatorSpec(
             mode,
-            loss=loss,
-            eval_metric_ops={'my_accuracy': accuracy})
+            loss=loss
+            # ,
+            # eval_metric_ops={'my_accuracy': accuracy}
+        )
 
     # If mode is not PREDICT nor EVAL, then we must be in TRAIN
     assert mode == tf.estimator.ModeKeys.TRAIN, "TRAIN is only ModeKey left"
@@ -184,11 +182,11 @@ def my_model_fn(
         train_op=train_op)
 
 # Create a custom estimator using my_model_fn to define the model
-print("*** Before classifier construction")
+tf.logging.info("Before classifier construction")
 classifier = tf.estimator.Estimator(
     model_fn=my_model_fn,
     model_dir=PATH)  # Path to where checkpoints etc are stored
-print("...done")
+tf.logging.info("...done constructing classifier")
 
 # 500 epochs = 500 * 120 records [60000] = (500 * 120) / 32 batches = 1875 batches
 # 4 epochs = 4 * 30 records = (4 * 30) / 32 batches = 3.75 batches
@@ -196,30 +194,30 @@ print("...done")
 # Train our model, use the previously function my_input_fn
 # Input to training is a file with training example
 # Stop training after 8 iterations of train data (epochs)
-print("*** Before classifier.train")
+tf.logging.info("Before classifier.train")
 classifier.train(
     input_fn=lambda: my_input_fn(FILE_TRAIN, 500, 256))
-print("...done")
+tf.logging.info("...done classifier.train")
 
 # Evaluate our model using the examples contained in FILE_TEST
 # Return value will contain evaluation_metrics such as: loss & average_loss
-print("*** Before classifier.evaluate")
+tf.logging.info("Before classifier.evaluate")
 evaluate_result = classifier.evaluate(
     input_fn=lambda: my_input_fn(FILE_TEST, 4))
-print("...done")
-print("Evaluation results")
+tf.logging.info("...done classifier.evaluate")
+tf.logging.info("Evaluation results")
 for key in evaluate_result:
-    print("   {}, was: {}".format(key, evaluate_result[key]))
+    tf.logging.info("   {}, was: {}".format(key, evaluate_result[key]))
 
 # Predict the type of some Iris flowers.
 # Let's predict the examples in FILE_TEST, repeat only once.
 predict_results = classifier.predict(
     input_fn=lambda: my_input_fn(FILE_TEST, 1))
-print("Predictions on test file")
+tf.logging.info("Prediction on test file")
 for prediction in predict_results:
     # Will print the predicted class, i.e: 0, 1, or 2 if the prediction
     # is Iris Sentosa, Vericolor, Virginica, respectively.
-    print(prediction["class_ids"])
+    tf.logging.info("...{}".format(prediction["class_ids"]))
 
 # Let create a dataset for prediction
 # We've taken the first 3 examples in FILE_TEST
@@ -232,7 +230,7 @@ def new_input_fn():
         x = tf.split(x, 4)  # Need to split into our 4 features
         return dict(zip(feature_names, x))  # To build a dict of them
 
-    dataset = tf.contrib.data.Dataset.from_tensor_slices(prediction_input)
+    dataset = tf.data.Dataset.from_tensor_slices(prediction_input)
     dataset = dataset.map(decode)
     iterator = dataset.make_one_shot_iterator()
     next_feature_batch = iterator.get_next()
@@ -242,12 +240,12 @@ def new_input_fn():
 predict_results = classifier.predict(input_fn=new_input_fn)
 
 # Print results
-print("Predictions on memory")
+tf.logging.info("Predictions on memory")
 for idx, prediction in enumerate(predict_results):
     type = prediction["class_ids"]  # Get the predicted class (index)
     if type == 0:
-        print("I think: {}, is Iris Sentosa".format(prediction_input[idx]))
+        tf.logging.info("...I think: {}, is Iris Sentosa".format(prediction_input[idx]))
     elif type == 1:
-        print("I think: {}, is Iris Versicolor".format(prediction_input[idx]))
+        tf.logging.info("...I think: {}, is Iris Versicolor".format(prediction_input[idx]))
     else:
-        print("I think: {}, is Iris Virginica".format(prediction_input[idx]))
+        tf.logging.info("...I think: {}, is Iris Virginica".format(prediction_input[idx]))
