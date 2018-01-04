@@ -135,7 +135,7 @@ def stepModel(sess, xs, action):
 ------------------------------------------------------------------------------
 Training the Policy and Model
 '''
-hist_observation, hist_action, hist_action_invert, hist_reward, hist_done = [], [], [], [], []
+hist_observation, hist_action, hist_reward, hist_done = [], [], [], []
 running_reward = None
 reward_sum = 0
 episode_number = 1
@@ -170,7 +170,6 @@ with tf.Session() as sess:
         action = 1 if np.random.uniform() < action_probability else 0
         action_invert = 1 if action == 0 else 0  # Invert value, otherwise we get grad problem
         hist_action.append(action)
-        hist_action_invert.append(action_invert)
 
         # Step the  model or real environment and get new measurements
         if drawFromModel == False:
@@ -192,28 +191,14 @@ with tf.Session() as sess:
             # Stack together all inputs, hidden states, action gradients, and rewards for this episode
             epo = np.vstack(hist_observation)
             epa = np.vstack(hist_action)
-            epa_invert = np.vstack(hist_action_invert)
             epr = np.vstack(hist_reward)
             epd = np.vstack(hist_done)
-            hist_observation, hist_action, hist_action_invert, hist_reward, hist_done = [], [], [], [], []  # Reset array memory
-
-            # for idx, y in enumerate(epa):
-            #     print("{}: {}".format(idx,y))
-            #     if idx > 4:
-            #         break
-            # test = np.asarray([2,2])
-            # print(test + 1)
+            hist_observation, hist_action, hist_reward, hist_done = [], [], [], []  # Reset array memory
 
             if trainTheModel == True:
-                # actions = np.array([np.abs(y - 1) for y in epa][:-1])
                 actions = epa[:-1]
-
-                # print(np.shape(epa))
-                # print(np.shape(np.hstack(epa)))
-                # print(np.shape(actions))
-                state_prevs = epo[:-1, :]
-                # print(np.shape(state_prevs))
-                state_prevs = np.hstack([state_prevs, actions])
+                state_prevs1 = epo[:-1, :]
+                state_prevs = np.hstack([state_prevs1, actions])
                 state_nexts = epo[1:, :]
                 rewards = np.array(epr[1:, :])
                 dones = np.array(epd[1:, :])
@@ -229,9 +214,10 @@ with tf.Session() as sess:
                 discounted_epr = discount_rewards(epr).astype('float32')
                 discounted_epr -= np.mean(discounted_epr)
                 discounted_epr /= np.std(discounted_epr)
+                actions = np.array([np.abs(value-1) for value in epa])
                 tGrad = sess.run(newGrads,
                                  feed_dict={observations_ph: epo,
-                                            input_y: epa_invert,
+                                            input_y: actions,
                                             advantages: discounted_epr})
 
                 if np.sum(tGrad[0] == tGrad[0]) == 0:
