@@ -48,6 +48,13 @@ loss = -tf.reduce_mean(loglik * advantages)
 newGrads = tf.gradients(loss, tvars)
 updateGrads = adam.apply_gradients(zip(batchGrad,tvars))
 
+# tGrad = sess.run(newGrads,
+#                  feed_dict={observations_ph: epo,
+#                             input_y: actions,
+#                             advantages: discounted_epr})
+# for ix, grad in enumerate(tGrad):
+#     gradBuffer[ix] += grad
+
 
 '''
 ------------------------------------------------------------------------------
@@ -105,14 +112,17 @@ def resetGradBuffer(gradBuffer):
     return gradBuffer
 
 
-def discount_rewards(r):
+def discount_and_normalize_rewards(r):
     # Take 1D float array of rewards and compute discounted reward
     discounted_r = np.zeros_like(r)
     running_add = 0
     for t in reversed(range(0, r.size)):
         running_add = running_add * gamma + r[t]
         discounted_r[t] = running_add
-    return discounted_r
+
+    discounted_r -= np.mean(discounted_r)
+    discounted_r /= np.std(discounted_r)
+    return discounted_r.astype(np.float32)
 
 
 # This function uses our model to produce a new state when given a previous state and action
@@ -223,10 +233,8 @@ with tf.Session() as sess:
                                                      true_reward: rewards})
 
             if trainThePolicy == True:
-                discounted_epr = discount_rewards(epr).astype('float32')
-                discounted_epr -= np.mean(discounted_epr)
-                discounted_epr /= np.std(discounted_epr)
-                actions = np.array([np.abs(value-1) for value in epa])
+                discounted_epr = discount_and_normalize_rewards(epr)
+                actions = np.array([np.abs(value-1) for value in epa])  # *** WHY INVERT??? ***
                 tGrad = sess.run(newGrads,
                                  feed_dict={observations_ph: epo,
                                             input_y: actions,
