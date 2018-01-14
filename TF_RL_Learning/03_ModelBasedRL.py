@@ -20,7 +20,7 @@ decay_rate = 0.99  # Decay factor for RMSProp leaky sum of grad^2
 resume = False  # Resume from previous checkpoint?
 
 model_bs = 3  # Batch size when learning from model
-real_bs = 3  # Batch size when learning from real environment
+real_bs = 3   # Batch size when learning from real environment
 
 # Model initialization
 D = 4  # Input dimensionality
@@ -29,6 +29,7 @@ D = 4  # Input dimensionality
 ------------------------------------------------------------------------------
 Policy Network
 '''
+# Use observations as input to generate predicted actions
 observations_ph = tf.placeholder(tf.float32, [None,4] , name="input_x")
 W1 = tf.get_variable("W1", shape=[4, H], initializer=tf.contrib.layers.xavier_initializer())
 layer1 = tf.nn.relu(tf.matmul(observations_ph, W1))
@@ -36,25 +37,20 @@ W2 = tf.get_variable("W2", shape=[H, 1], initializer=tf.contrib.layers.xavier_in
 score = tf.matmul(layer1, W2)
 action_sigmoid = tf.nn.sigmoid(score)
 
-tvars = tf.trainable_variables()
-input_y = tf.placeholder(tf.float32, [None,1], name="input_y")
-advantages = tf.placeholder(tf.float32, name="reward_signal")
-adam = tf.train.AdamOptimizer(learning_rate=learning_rate)
-W1Grad = tf.placeholder(tf.float32, name="batch_grad1")
-W2Grad = tf.placeholder(tf.float32, name="batch_grad2")
-batchGrad = [W1Grad, W2Grad]
-loglik = tf.log(input_y * (input_y-action_sigmoid) + (1-input_y) * (input_y+action_sigmoid))
-loss = -tf.reduce_mean(loglik * advantages)
-newGrads = tf.gradients(loss, tvars)
-updateGrads = adam.apply_gradients(zip(batchGrad,tvars))
+training_variables = tf.trainable_variables()
+actions_ph = tf.placeholder(tf.float32, [None,1], name="actions_ph")
+rewards_ph = tf.placeholder(tf.float32, name="rewards_ph")
 
-# tGrad = sess.run(newGrads,
-#                  feed_dict={observations_ph: epo,
-#                             input_y: actions,
-#                             advantages: discounted_epr})
-# for ix, grad in enumerate(tGrad):
-#     gradBuffer[ix] += grad
+log_likelihood = tf.log(actions_ph * (actions_ph-action_sigmoid) + (1-actions_ph) * (actions_ph+action_sigmoid))
+loss = -tf.reduce_mean(log_likelihood * rewards_ph)
 
+new_grads = tf.gradients(loss, training_variables)  # Calculate gradients to tvars wrt loss
+
+w1_grad_ph = tf.placeholder(tf.float32, name="w1_grad_ph")
+w2_grad_ph = tf.placeholder(tf.float32, name="w2_grad_ph")
+w1w2_list = [w1_grad_ph, w2_grad_ph]
+optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+update_grads = optimizer.apply_gradients(zip(w1w2_list, training_variables))
 
 '''
 ------------------------------------------------------------------------------
@@ -106,10 +102,10 @@ update_model = model_adam.minimize(model_loss)
 ------------------------------------------------------------------------------
 Helper Functions
 '''
-def resetGradBuffer(gradBuffer):
-    for ix, grad in enumerate(gradBuffer):
-        gradBuffer[ix] = grad * 0
-    return gradBuffer
+def resetGradBuffer(grad_buffer):
+    for ix, grad in enumerate(grad_buffer):
+        grad_buffer[ix] = grad * 0
+    return grad_buffer
 
 
 def discount_and_normalize_rewards(r):
@@ -126,15 +122,15 @@ def discount_and_normalize_rewards(r):
 
 
 # This function uses our model to produce a new state when given a previous state and action
-def stepModel(sess, xs, action):
-    toFeed = np.reshape(np.hstack([xs[-1][0], np.array(action)]), [1, 5])
+def stepModel(sess, observation_list, action):
+    toFeed = np.reshape(np.hstack([observation_list[-1][0], np.array(action)]), [1, 5])
     myPredict = sess.run([predicted_state], feed_dict={previous_state: toFeed})
     reward = myPredict[0][:, 4]
     observation = myPredict[0][:, 0:4]
     observation[:, 0] = np.clip(observation[:, 0], -2.4, 2.4)
     observation[:, 2] = np.clip(observation[:, 2], -0.4, 0.4)
     doneP = np.clip(myPredict[0][:, 5], 0, 1)
-    if doneP > 0.1 or len(xs) >= 300:
+    if doneP > 0.1 or len(observation_list) >= 300:
         done = True
     else:
         done = False
@@ -163,8 +159,8 @@ with tf.Session() as sess:
     rendering = False
     sess.run(init)
     observation = env.reset()
-    gradBuffer = sess.run(tvars)
-    gradBuffer = resetGradBuffer(gradBuffer)
+    grad_buffer = sess.run(training_variables)
+    grad_buffer = resetGradBuffer(grad_buffer)
 
     while episode_number <= 5000:
 
@@ -178,7 +174,6 @@ with tf.Session() as sess:
 
         action_probability = sess.run(action_sigmoid, feed_dict={observations_ph: observation})
         action = 1 if np.random.uniform() < action_probability else 0
-        action_invert = 1 if action == 0 else 0  # Invert value, otherwise we get grad problem
         hist_action.append(action)
 
         # Step the  model or real environment and get new measurements
@@ -235,26 +230,26 @@ with tf.Session() as sess:
             if trainThePolicy == True:
                 discounted_epr = discount_and_normalize_rewards(epr)
                 actions = np.array([np.abs(value-1) for value in epa])  # *** WHY INVERT??? ***
-                tGrad = sess.run(newGrads,
-                                 feed_dict={observations_ph: epo,
-                                            input_y: actions,
-                                            advantages: discounted_epr})
+                t_grad = sess.run(new_grads,
+                                  feed_dict={observations_ph: epo,
+                                             actions_ph: actions,
+                                             rewards_ph: discounted_epr})
 
-                if np.sum(tGrad[0] == tGrad[0]) == 0:
+                if np.sum(t_grad[0] == t_grad[0]) == 0:
                     print("Terminating because of grad problem")
                     break
-                for ix, grad in enumerate(tGrad):
-                    gradBuffer[ix] += grad
+                for idx, grad in enumerate(t_grad):
+                    grad_buffer[idx] += grad
 
-            if switch_point + batch_size == episode_number:
-                switch_point = episode_number
+            if episode_number > 0 and (episode_number % batch_size == 0):
                 if trainThePolicy == True:
-                    sess.run(updateGrads,
-                             feed_dict={W1Grad: gradBuffer[0],
-                                        W2Grad: gradBuffer[1]})
-                    gradBuffer = resetGradBuffer(gradBuffer)
+                    sess.run(update_grads,
+                             feed_dict={w1_grad_ph: grad_buffer[0],
+                                        w2_grad_ph: grad_buffer[1]})
+                    grad_buffer = resetGradBuffer(grad_buffer)
 
                 running_reward = reward_sum if running_reward is None else running_reward * 0.99 + reward_sum * 0.01
+
                 if drawFromModel == False:
                     print('World Perf: Episode %f. Reward %f. action: %f. mean reward %f.' %
                           (real_episodes, reward_sum / real_bs, action, running_reward / real_bs))
