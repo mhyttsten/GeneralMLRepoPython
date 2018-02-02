@@ -8,7 +8,6 @@ import csv
 import itertools
 import tensorflow.contrib.slim as slim
 
-
 # This is a simple function to reshape our game frames.
 def processState(state1):
     return np.reshape(state1, [21168])
@@ -23,7 +22,6 @@ def updateTargetGraph(tfVars, tau):
             (var.value() * tau) + ((1 - tau) * tfVars[idx + total_vars // 2].value())))
     return op_holder
 
-
 update_count = 0
 def updateTarget(op_holder, sess):
     global update_count
@@ -37,7 +35,7 @@ def updateTarget(op_holder, sess):
         if update_count % 50 == 0:
             print("Target Set Success: {}".format(update_count))
     else:
-        print("Target Set Failed")
+        assert False, "Target Set Failed"
 
 
 # Record performance metrics and episode logs for the Control Center.
@@ -50,10 +48,11 @@ def saveToCenter(logfile, path, i, rList, jList, bufferArray, summaryLength, h_s
         state_display = (np.zeros([1, h_size]), np.zeros([1, h_size]))
         imagesS = []
         for idx, z in enumerate(np.vstack(bufferArray[:, 0])):
-            img, state_display = sess.run([mainQN.salience, mainQN.rnn_state], \
+            img, state_display = sess.run([mainQN.salience, mainQN.rnn_state],
                                           feed_dict={
-                                              mainQN.scalarInput: np.reshape(bufferArray[idx, 0], [1, 21168]) / 255.0, \
-                                              mainQN.trainLength: 1, mainQN.state_in: state_display,
+                                              mainQN.scalarInput: np.reshape(bufferArray[idx, 0], [1, 21168]) / 255.0,
+                                              mainQN.trainLength: 1,
+                                              mainQN.rnn_state_in: state_display,
                                               mainQN.batch_size: 1})
             imagesS.append(img)
         imagesS = (imagesS - np.min(imagesS)) / (np.max(imagesS) - np.min(imagesS))
@@ -88,7 +87,8 @@ def saveToCenter(logfile, path, i, rList, jList, bufferArray, summaryLength, h_s
         wr.writerow(["ACTION", "REWARD", "A0", "A1", 'A2', 'A3', 'V'])
         a, v = sess.run([mainQN.Advantage, mainQN.Value], \
                         feed_dict={mainQN.scalarInput: np.vstack(bufferArray[:, 0]) / 255.0,
-                                   mainQN.trainLength: len(bufferArray), mainQN.state_in: state_train,
+                                   mainQN.trainLength: len(bufferArray),
+                                   mainQN.rnn_state_in: state_train,
                                    mainQN.batch_size: 1})
         wr.writerows(zip(bufferArray[:, 1], bufferArray[:, 2], a[:, 0], a[:, 1], a[:, 2], a[:, 3], v[:, 0]))
 

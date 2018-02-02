@@ -51,32 +51,37 @@ class Qnetwork():
 
         print("self.conv4: {}".format(self.conv4))  # [?, 1, 1, 512]
 
+        self.conv4 = pf_utils.debug_tensor_shape(self.conv4, "tf.shape(self.conv4)")
+
         # We take the output from the final convolutional layer and send it to a recurrent layer.
         # The input must be reshaped into [batch x trace x units] for rnn processing,
         # and then returned to [batch x units] when sent through the upper levles.
+        self.conv4 = slim.flatten(self.conv4)
+        self.conv4 = pf_utils.debug_tensor_shape(self.conv4, "tf.shape(self.conv4)")
         self.batch_size = tf.placeholder(dtype=tf.int32, shape=[])
         self.trainLength = tf.placeholder(dtype=tf.int32)
-        self.convFlat = tf.reshape(slim.flatten(self.conv4), [self.batch_size, self.trainLength, h_size])
+        self.convFlat = tf.reshape(self.conv4, [self.batch_size, self.trainLength, h_size])
         print("self.convFlat: {}".format(self.convFlat))  # [?, ?, 512]
 
         # c, and h:     [batch_size, 512]
         # input:        [batch_size, time_slice, 512]
         # rnn (output): [batch_size, time_slice, 512]
         rnn_cell = tf.contrib.rnn.BasicLSTMCell(num_units=h_size, state_is_tuple=True)
-        self.state_in = rnn_cell.zero_state(self.batch_size, tf.float32)
-        print("self.state_in: {}".format(self.state_in))  # c: [?, 512], h: [?, 512]
-        self.convFlat = pf_utils.debug_tensor_shape(self.convFlat, "convFlat_shape")
+        self.rnn_state_in = rnn_cell.zero_state(self.batch_size, tf.float32)
+        print("self.state_in: {}".format(self.rnn_state_in))  # c: [?, 512], h: [?, 512]
+        self.convFlat = pf_utils.debug_tensor_shape(self.convFlat, "tf.shape(self.convFlat)")
 
         # rnn is output, rnn_state is LSTMStateTuple [ c, h ]
         self.rnn, self.rnn_state = tf.nn.dynamic_rnn(inputs=self.convFlat,
                                                      cell=rnn_cell,
                                                      dtype=tf.float32,
-                                                     initial_state=self.state_in,
+                                                     initial_state=self.rnn_state_in,
                                                      scope=myScope + '_rnn')
-        self.rnn = pf_utils.debug_tensor_shape(self.rnn, "rnn_shape")
+        self.rnn = pf_utils.debug_tensor_shape(self.rnn, "tf.shape(self.rnn)")
         print("self.rnn: {}".format(self.rnn))  # [?, ?, 512]
         print("self.rnn_state: {}".format(self.rnn_state))  # [?, 512], h: [?, 512]
         self.rnn = tf.reshape(self.rnn, shape=[-1, h_size])
+        self.rnn = pf_utils.debug_tensor_shape(self.rnn, "tf.reshaped(self.rnn)")
 
         # The output from the recurrent player is then split into separate Value and Advantage streams
         self.streamA, self.streamV = tf.split(self.rnn, 2, 1)
@@ -85,9 +90,12 @@ class Qnetwork():
         self.Advantage = tf.matmul(self.streamA, self.AW)
         self.Value = tf.matmul(self.streamV, self.VW)
 
+        # Only used for control center, not needed for core logic
         self.salience = tf.gradients(self.Advantage, self.imageIn)
+
         # Then combine them together to get our final Q-values.
         self.Qout = self.Value + tf.subtract(self.Advantage, tf.reduce_mean(self.Advantage, axis=1, keep_dims=True))
+        self.Qout = pf_utils.debug_tensor_shape(self.Qout, "tf.reshaped(self.Qout)")
         self.predict = tf.argmax(self.Qout, 1)
 
         # Below we obtain the loss by taking the sum of squares difference between the target and prediction Q values.
@@ -97,14 +105,18 @@ class Qnetwork():
 
         self.Q = tf.reduce_sum(tf.multiply(self.Qout, self.actions_onehot), axis=1)
 
+        self.targetQ = pf_utils.debug_tensor_shape(self.Q, "tf.reshaped(self.targetQ)")
+        self.Q = pf_utils.debug_tensor_shape(self.Q, "tf.reshaped(self.Q)")
         self.td_error = tf.square(self.targetQ - self.Q)
+        self.td_error = pf_utils.debug_tensor_shape(self.td_error, "tf.reshaped(self.td_error)")
 
-        # In order to only propogate accurate gradients through the network, we will mask the first
+        # In order to only propagate accurate gradients through the network, we will mask the first
         # half of the losses for each trace as per Lample & Chatlot 2016
         self.maskA = tf.zeros([self.batch_size, self.trainLength // 2])
         self.maskB = tf.ones([self.batch_size, self.trainLength // 2])
         self.mask = tf.concat([self.maskA, self.maskB], 1)
         self.mask = tf.reshape(self.mask, [-1])
+        self.mask = pf_utils.debug_tensor_shape(self.mask, "tf.reshaped(self.mask)")
         self.loss = tf.reduce_mean(self.td_error * self.mask)
 
         self.trainer = tf.train.AdamOptimizer(learning_rate=0.0001)
@@ -198,7 +210,7 @@ with tf.Session() as sess:
         d = False
         rAll = 0
         j = 0
-        state = (np.zeros([1, h_size]), np.zeros([1, h_size]))  # Reset the recurrent layer's hidden state
+        rnn_state = (np.zeros([1, h_size]), np.zeros([1, h_size]))  # Reset the recurrent layer's hidden state
 
         # The Q-Network
         while j < max_epLength:
@@ -206,73 +218,87 @@ with tf.Session() as sess:
 
             total_steps += 1
             if total_steps == pre_train_steps:
-                pf_utils.sleep("We've reached pre_train limit of: {}, sleeping 10s".format(pre_train_steps), 10)
+                pf_utils.sleep("\n\n\n\nWe've reached pre_train limit of: {}, sleeping 10s".format(pre_train_steps), 2)
                 pf_utils.debug("...Now continuing")
+            if total_steps > pre_train_steps:
+                pf_utils.sleep("Get mainQN.predict action: {}".format(total_steps), 1)
+            else:
+                pf_utils.debug("Get mainQN.predict action: {}".format(total_steps))
 
             # Choose an action by greedily (with e chance of random action) from the Q-network
-            pf_utils.debug("Taking step: {}".format(total_steps))
-            a, state1 = sess.run([mainQN.predict, mainQN.rnn_state],
-                                 feed_dict={mainQN.scalarInput: [s / 255.0],
-                                            mainQN.trainLength: 1,
-                                            mainQN.state_in: state,
-                                            mainQN.batch_size: 1})
+            a, rnn_state = sess.run([mainQN.predict, mainQN.rnn_state],
+                                 feed_dict = {mainQN.scalarInput: [s / 255.0],
+                                              mainQN.batch_size: 1,
+                                              mainQN.trainLength: 1,
+                                              mainQN.rnn_state_in: rnn_state})
             a = a[0]
             if np.random.rand(1) < e or total_steps < pre_train_steps:
-                pf_utils.debug("... changing to random step")
+                if total_steps > pre_train_steps:
+                    pf_utils.sleep("... changing to random step: {}", 1)
+                else:
+                    pf_utils.debug("... changing to random step")
                 a = np.random.randint(0, 4)
 
             s1P, r, d = env.step(a)
             s1 = processState(s1P)
-            episodeBuffer.append(np.reshape(np.array([s, a, r, s1, d]), [1, 5]))
+            episode_elem = np.array([s, a, r, s1, d])
+            episode = np.reshape(episode_elem, [1, 5])
+            episodeBuffer.append(episode)  # Python [ numpy_array of [1, 5] ]
 
+            rAll += r
+            s = s1
+            sP = s1P
+            if d == True:
+                break
 
             if total_steps > pre_train_steps:
                 if e > endE:
                     e -= stepDrop
 
-                if total_steps % (update_freq) == 0:
-                    pf_utils.debug("**** Dow doing update, total_steps: {}. epoch: {}".format(total_steps, i))
+                if total_steps % update_freq == 0:
+                    pf_utils.sleep("*** Doing training step, total_steps: {}. epoch: {}".format(total_steps, i), 1)
                     updateTarget(targetOps, sess)
 
                     # Reset the recurrent layer's hidden state
-                    state_train = (np.zeros([batch_size, h_size]), np.zeros([batch_size, h_size]))
+                    rnn_state_train = (np.zeros([batch_size, h_size]), np.zeros([batch_size, h_size]))
 
                     trainBatch = myBuffer.sample(batch_size, trace_length)  # Get a random batch of experiences.
+                    print("trainBatch.length: {}".format(len(trainBatch)))
 
                     # Below we perform the Double-DQN update to the target Q-values
+                    pf_utils.sleep("...mainQN.predict", 1)
                     Q1 = sess.run(mainQN.predict,
                                   feed_dict={
                                       mainQN.scalarInput: np.vstack(trainBatch[:, 3] / 255.0),
+                                      mainQN.batch_size: batch_size,
                                       mainQN.trainLength: trace_length,
-                                      mainQN.state_in: state_train,
-                                      mainQN.batch_size: batch_size})
+                                      mainQN.rnn_state_in: rnn_state_train})
+                    pf_utils.sleep("...targetQN.Qout", 1)
                     Q2 = sess.run(targetQN.Qout,
                                   feed_dict={
                                       targetQN.scalarInput: np.vstack(trainBatch[:, 3] / 255.0),
+                                      targetQN.batch_size: batch_size,
                                       targetQN.trainLength: trace_length,
-                                      targetQN.state_in: state_train,
-                                      targetQN.batch_size: batch_size})
+                                      targetQN.rnn_state_in: rnn_state_train})
                     end_multiplier = -(trainBatch[:, 4] - 1)
                     doubleQ = Q2[range(batch_size * trace_length), Q1]
                     targetQ = trainBatch[:, 2] + (y * doubleQ * end_multiplier)
 
                     # Update the network with our target values.
+                    pf_utils.sleep("...mainQN.updateModel", 1)
                     sess.run(mainQN.updateModel,
                              feed_dict={
                                  mainQN.scalarInput: np.vstack(trainBatch[:, 0] / 255.0),
                                  mainQN.targetQ: targetQ,
                                  mainQN.actions: trainBatch[:, 1],
+                                 mainQN.batch_size: batch_size,
                                  mainQN.trainLength: trace_length,
-                                 mainQN.state_in: state_train,
-                                 mainQN.batch_size: batch_size })
-            rAll += r
-            s = s1
-            sP = s1P
-            state = state1
-            if d == True:
-                break
+                                 mainQN.rnn_state_in: rnn_state_train})
+                    pf_utils.sleep("\n\n**************************************\n*** Starting another update round, total_steps: {}. epoch: {}".format(total_steps, i), 1)
 
         # Add the episode to the experience buffer
+
+        # episodeBuffer = [ np.array([s, a, r, s1, d]) ]
         bufferArray = np.array(episodeBuffer)
         episodeBuffer = list(zip(bufferArray))
         myBuffer.add(episodeBuffer)
@@ -347,23 +373,19 @@ with tf.Session() as sess:
         while j < max_epLength:  # If the agent takes longer than 200 moves to reach either of the blocks, end the trial.
             j += 1
 
+            # Get the action
+            a, state1 = sess.run([mainQN.predict, mainQN.rnn_state],
+                                 feed_dict={
+                                     mainQN.scalarInput: [s / 255.0],
+                                     mainQN.trainLength: 1,
+                                     mainQN.state_in: state,
+                                     mainQN.batch_size: 1})
+            a = a[0]
+
             # Choose an action by greedily (with e chance of random action) from the Q-network
             if np.random.rand(1) < e:
-                state1 = sess.run(mainQN.rnn_state,
-                                  feed_dict={
-                                      mainQN.scalarInput: [s / 255.0],
-                                      mainQN.trainLength: 1,
-                                      mainQN.state_in: state,
-                                      mainQN.batch_size: 1 })
                 a = np.random.randint(0, 4)
-            else:
-                a, state1 = sess.run([mainQN.predict, mainQN.rnn_state],
-                                     feed_dict={
-                                         mainQN.scalarInput: [s / 255.0],
-                                         mainQN.trainLength: 1,
-                                         mainQN.state_in: state,
-                                         mainQN.batch_size: 1 })
-                a = a[0]
+
             s1P, r, d = env.step(a)
             s1 = processState(s1P)
             total_steps += 1

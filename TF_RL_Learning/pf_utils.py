@@ -3,11 +3,12 @@ import time
 
 debug_flag = True
 
-def sleep(message, time_is_s):
+def sleep(message, time_in_s):
     global debug_flag
     if debug_flag:
+        time.sleep(1)
         print(message)
-        time.sleep(5)
+        time.sleep(time_in_s)
 
 def debug(message):
     global debug_flag

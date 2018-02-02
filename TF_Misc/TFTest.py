@@ -7,6 +7,71 @@ def exit():
     if True:
         sys.exit()
 
+
+def test_timesplit_into_av():
+    a = tf.constant([
+            [
+                ["000","001","002","003","004","005"],["010","011","012","013","014","015"],["020","021","022","023","024","025"],["030","031","032","033","034","035"]
+            ],
+            [
+                ["100","101","102","103","104","105"],["110","111","112","113","114","115"],["120","121","122","123","124","125"],["130","131","132","133","134","135"]
+            ],
+            [
+                ["200","201","202","203","204","205"],["210","211","212","213","214","215"],["220","221","222","223","224","225"],["230","231","232","233","234","235"]
+            ],
+            [
+                ["300","301","302","303","304","305"],["310","311","312","313","314","315"],["320","321","322","323","324","325"],["330","331","332","333","334","335"]
+            ]
+        ])
+    b = tf.reshape(a, shape=[-1, 2])
+    c1, c2 = tf.split(b, 2, 1)
+    with tf.Session() as sess:
+        print(sess.run(tf.shape(a)))
+        print(sess.run(tf.shape(b)))
+        print(sess.run(tf.shape(c1)))
+        print(sess.run(c1))
+
+    maskA = tf.zeros([2, 4])
+    maskB = tf.ones([2, 4])
+    mask1 = tf.concat([maskA, maskB], 1)
+    mask = tf.reshape(mask1, [-1])
+    with tf.Session() as sess:
+        print(sess.run(tf.shape(mask1)))
+        print(sess.run(tf.shape(mask)))
+
+test_timesplit_into_av()
+exit()
+
+
+def test_experience_buffer():
+    episode_buffer = []
+    a1 = np.array([[0,1,2,3],     0, 1, [4,5,6,7],     False])
+    a2 = np.array([[8,9,10,11],   1, 0, [12,13,14,15], False])
+    a3 = np.array([[16,17,18,19], 1, 0, [20,21,22,23], False])
+    a4 = np.array([[24,25,26,27], 1, 0, [28,29,30,31], False])
+    e1 = np.reshape(a1, [1, 5])
+    e2 = np.reshape(a2, [1, 5])
+    e3 = np.reshape(a3, [1, 5])
+    e4 = np.reshape(a4, [1, 5])
+    episode_buffer.append(e1)
+    episode_buffer.append(e2)
+    episode_buffer.append(e3)
+    episode_buffer.append(e4)
+
+    bufferArray = np.array(episode_buffer)
+    episodeBuffer = list(zip(bufferArray))
+    for a in episodeBuffer:
+        print(a)
+        for b in a:
+            print("...{}".format(b))
+            for c in b:
+                print("......{}".format(c))
+                for d in c:
+                    print(".........{}".format(d))
+test_experience_buffer()
+exit()
+
+
 def test_advantage():
     c = tf.constant([[1,3], [3,9], [4,12]])
     with tf.Session() as sess:
